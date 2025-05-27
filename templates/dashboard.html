@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+    <h2>Welcome to your Dashboard, {{ current_user.email }}!</h2>
+    <p>You are successfully logged in.</p>
+
+    <hr>
+    <h3>Your Details:</h3>
+    <ul>
+        <li>Email: {{ user.email }}</li>
+        <li>Weight: {{ user.weight or 'Not set' }} kg</li>
+        <li>Height: {{ user.height or 'Not set' }} cm</li>
+        <li>Age: {{ user.age or 'Not set' }}</li>
+        <li>Gender: {{ user.gender or 'Not set' }}</li>
+        <li>BMR: {{ "%.0f"|format(user.bmr) if user.bmr else 'Not set' }} kcal</li>
+        {% if user.activity_level %}
+        <li>Activity Level Multiplier: {{ user.activity_level }}</li>
+        <li>Estimated TDEE: {{ "%.0f"|format(user.bmr * user.activity_level) if user.bmr and user.activity_level else 'Not set' }} kcal</li>
+        {% elif user.bmr %}
+        <li>Your BMR was input directly and is treated as your maintenance calories (TDEE).</li>
+        {% endif %}
+    </ul>
+    <p><a href="{{ url_for('initial_setup') }}">Update Your Details</a></p>
+    
+    <hr>
+    <h3>Your Goal:</h3>
+    {% if user.target_date and user.daily_calorie_goal %}
+        <p>Target Date: {{ user.target_date.strftime('%Y-%m-%d') }}</p>
+        <p>Daily Calorie Goal: <strong>{{ user.daily_calorie_goal }} kcal/day</strong></p>
+        <p><a href="{{ url_for('set_goal') }}">Adjust Your Goal</a></p>
+    {% else %}
+        <p>You haven't set a goal yet.</p>
+        <p><a href="{{ url_for('set_goal') }}">Set a Goal to Lose 1kg</a></p>
+    {% endif %}
+
+    <hr>
+    <p><a href="{{ url_for('logout') }}">Logout</a></p>
+
+    <hr>
+    <h3>Calorie Calendar ({{ cal_month }}/{{ cal_year }})</h3>
+    {% if calendar_data %}
+        <table border="1" style="width:100%; border-collapse: collapse;">
+            <thead>
+                <tr>
+                    <th>Mon</th>
+                    <th>Tue</th>
+                    <th>Wed</th>
+                    <th>Thu</th>
+                    <th>Fri</th>
+                    <th>Sat</th>
+                    <th>Sun</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for week in calendar_data %}
+                <tr>
+                    {% for day_info in week %}
+                        <td style="padding: 5px; vertical-align: top; height: 80px; {% if not day_info.is_current_month %}background-color: #f0f0f0;{% endif %}">
+                            <a href="{{ url_for('record_calories', date_str=day_info.date.strftime('%Y-%m-%d')) }}" style="text-decoration: none; color: inherit; display: block; height: 100%;">
+                                <strong>{{ day_info.day_number }}</strong>
+                                {% if day_info.is_current_month %}
+                                    <br>
+                                    {% if day_info.target_calories_for_day %}
+                                        {{ day_info.effective_consumed }} / {{ day_info.target_calories_for_day }}
+                                        {% if day_info.adjusted_calories != 0 %}
+                                            <br><small>({{ day_info.consumed_calories }} + {{ day_info.adjusted_calories }} adj
+                                            {% if user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
+                                                - {{ day_info.daily_exercise_calories }} exer
+                                            {% endif %}
+                                            )</small>
+                                        {% elif user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
+                                             <br><small>({{ day_info.consumed_calories }} - {{ day_info.daily_exercise_calories }} exer)</small>
+                                        {% endif %}
+                                    {% else %}
+                                        {{ day_info.effective_consumed }} / -
+                                        {% if day_info.adjusted_calories != 0 %}
+                                            <br><small>({{ day_info.consumed_calories }} + {{ day_info.adjusted_calories }} adj
+                                            {% if user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
+                                                - {{ day_info.daily_exercise_calories }} exer
+                                            {% endif %}
+                                            )</small>
+                                        {% elif user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
+                                             <br><small>({{ day_info.consumed_calories }} - {{ day_info.daily_exercise_calories }} exer)</small>
+                                        {% endif %}
+                                    {% endif %}
+                                    {% if day_info.daily_exercise_calories > 0 %}
+                                        <br><small style="color: green;">+{{ day_info.daily_exercise_calories }} exercise</small>
+                                    {% endif %}
+                                {% endif %}
+                            </a>
+                        </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>Set a goal or record calories/exercise for any day to see your calendar.</p>
+    {% endif %}
+    <p>
+        <a href="{{ url_for('dashboard', year=prev_year, month=prev_month) }}">&lt;&lt; Previous Month ({{ prev_month }}/{{ prev_year }})</a> | 
+        <a href="{{ url_for('dashboard', year=next_year, month=next_month) }}">Next Month ({{ next_month }}/{{ next_year }}) &gt;&gt;</a>
+    </p>
+    <p><a href="{{ url_for('record_exercise') }}">Record Exercise</a> | <a href="{{ url_for('settings') }}">Settings (Exercise Mode: {{user.exercise_tracking_mode}})</a></p>
+
+    <hr>
+    <h3>Cycle Progress</h3>
+    <p>Current cycle progress (food deficit{{ ", offset by exercise" if user.exercise_tracking_mode == 'offset' else "" }}): <strong>{{ "%.0f"|format(total_deficit_since_last_reset) }} / 7200 kcal</strong> towards your 1kg goal.</p>
+    {% if total_deficit_since_last_reset >= 0 %}
+        <p>(This represents a net deficit from food{{ " and exercise" if user.exercise_tracking_mode == 'offset' else "" }}. Well done!)</p>
+    {% else %}
+        <p>(This represents a net surplus from food{{ " and exercise" if user.exercise_tracking_mode == 'offset' else "" }}. Keep tracking to get back to a deficit!)</p>
+    {% endif %}
+    
+    {% if user.exercise_tracking_mode == 'separate' and total_exercise_kcal_since_reset > 0 %}
+    <p style="margin-top:10px;">Additionally, you've burned <strong>{{ "%.0f"|format(total_exercise_kcal_since_reset) }} kcal</strong> from exercise in this cycle (separate from food deficit).</p>
+    <p>This is equivalent to approximately <strong>{{ "%.2f"|format(total_exercise_kcal_since_reset / 7200) }} kg</strong> of potential extra weight loss!</p>
+    {% endif %}
+
+
+    {% if cycle_complete_flag %}
+    <div class="alert alert-success" style="margin-top:15px;">
+        <h4>Congratulations! You've achieved a {{ 7200 if user.exercise_tracking_mode == 'offset' else "food-based " }}7200 kcal deficit{{ " (offset by exercise)" if user.exercise_tracking_mode == 'offset' else "" }}.</h4>
+        <p>This is a significant milestone. It's time to record your new weight and start a new cycle.</p>
+        <p><a href="{{ url_for('cycle_reset') }}" class="btn btn-primary">Record New Weight & Reset Cycle</a></p>
+    </div>
+    {% endif %}
+
+{% endblock %}

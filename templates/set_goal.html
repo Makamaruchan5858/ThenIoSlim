@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Set Your Goal{% endblock %}
+{% block content %}
+<h2>Set Your Goal</h2>
+<p>Set a target date by which you aim to lose 1kg. We'll calculate a daily calorie goal for you.</p>
+
+{% if user.bmr %}
+    <p>Your current BMR is: <strong>{{ "%.0f"|format(user.bmr) }} kcal</strong></p>
+    {% if user.activity_level %}
+        <p>Your estimated TDEE (Total Daily Energy Expenditure) is: <strong>{{ "%.0f"|format(user.bmr * user.activity_level) }} kcal</strong></p>
+    {% else %}
+        <p>Your BMR was input directly, this will be used as your maintenance calories.</p>
+    {% endif %}
+{% else %}
+    <p>Please <a href="{{ url_for('initial_setup') }}">complete your initial setup</a> to calculate your BMR first.</p>
+{% endif %}
+
+<form method="POST" action="{{ url_for('set_goal') }}">
+    <div>
+        <label for="target_date">Target Date to Lose 1kg:</label>
+        <input type="date" name="target_date" id="target_date" 
+               value="{{ user.target_date.strftime('%Y-%m-%d') if user.target_date else '' }}" 
+               min="{{ min_date.strftime('%Y-%m-%d') }}"
+               required>
+    </div>
+    <div>
+        <button type="submit" {% if not user.bmr %}disabled{% endif %}>Set Goal</button>
+    </div>
+</form>
+
+{% if user.target_date and user.daily_calorie_goal %}
+<hr>
+<h3>Current Goal</h3>
+<p>Target Date: {{ user.target_date.strftime('%Y-%m-%d') }}</p>
+<p>Calculated Daily Calorie Goal: {{ user.daily_calorie_goal }} kcal</p>
+{% endif %}
+
+{% endblock %}

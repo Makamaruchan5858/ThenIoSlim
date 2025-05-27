@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Handle Calorie Overflow{% endblock %}
+{% block content %}
+<h2>Handle Calorie Overflow</h2>
+
+<p>You have an overflow of <strong>{{ overflow_amount }} calories</strong> from <strong>{{ overflow_date_str }}</strong>.</p>
+<p>Please choose how you want to handle this:</p>
+
+<form method="POST" action="{{ url_for('handle_overflow') }}">
+    <div>
+        <button type="submit" name="mode" value="mode_A_carry_next_day">
+            Carry over all {{ overflow_amount }} calories to tomorrow
+        </button>
+    </div>
+
+    {% if remaining_days > 0 %}
+    <div style="margin-top: 15px;">
+        <button type="submit" name="mode" value="mode_B_distribute_remaining">
+            Distribute {{ overflow_amount }} calories over the next {{ remaining_days }} day(s) of your goal
+        </button>
+    </div>
+    {% else %}
+    <div style="margin-top: 15px;">
+        <p><em>Distribution over remaining days is not available as there are no remaining days in your goal, or the goal target date is tomorrow.</em></p>
+    </div>
+    {% endif %}
+</form>
+
+<p style="margin-top: 20px;"><a href="{{ url_for('dashboard', year=overflow_date_str.split('-')[0], month=overflow_date_str.split('-')[1]) }}">Cancel and return to dashboard</a></p>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+
+<h3>Exercise Tracking Mode</h3>
+<p>Current mode: <strong>{{ current_mode }}</strong></p>
+<form method="POST" action="{{ url_for('settings') }}">
+    <div>
+        <label for="exercise_tracking_mode">Choose tracking mode:</label>
+        <select name="exercise_tracking_mode" id="exercise_tracking_mode">
+            <option value="separate" {% if current_mode == 'separate' %}selected{% endif %}>
+                Separate (track exercise calories independently of food calorie targets)
+            </option>
+            <option value="offset" {% if current_mode == 'offset' %}selected{% endif %}>
+                Offset (exercise calories increase your effective daily food calorie target)
+            </option>
+        </select>
+    </div>
+    <div style="margin-top: 10px;">
+        <button type="submit">Save Settings</button>
+    </div>
+</form>
+<p style="margin-top: 20px;">
+    <strong>Separate Mode:</strong> Your daily calorie goal for food remains fixed. Exercise is tracked as a separate achievement.
+    Progress towards your 7200kcal cycle is based purely on your food calorie deficit.
+    Additional feedback on exercise impact will be shown on the dashboard.
+</p>
+<p>
+    <strong>Offset Mode:</strong> Calories burned through exercise effectively increase your food calorie target for the day,
+    or directly offset your consumed calories. Progress towards your 7200kcal cycle will include calories burned from exercise.
+</p>
+
+<p style="margin-top:30px;"><a href="{{ url_for('dashboard') }}">Back to Dashboard</a></p>
+{% endblock %}

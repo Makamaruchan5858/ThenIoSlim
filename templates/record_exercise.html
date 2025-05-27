@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Record Exercise{% endblock %}
+{% block content %}
+<h2>Record Exercise</h2>
+
+<form method="POST" action="{{ url_for('record_exercise') }}">
+    <div>
+        <label for="date">Date:</label>
+        <input type="date" name="date" id="date" 
+               value="{{ date_val if date_val else today_date.strftime('%Y-%m-%d') }}" required>
+    </div>
+    <div style="margin-top: 10px;">
+        <label for="calories_burned">Calories Burned:</label>
+        <input type="number" name="calories_burned" id="calories_burned" 
+               value="{{ cal_val if cal_val else '' }}" required min="1">
+    </div>
+    <div style="margin-top: 10px;">
+        <label for="description">Description (optional):</label>
+        <input type="text" name="description" id="description" 
+               value="{{ desc_val if desc_val else '' }}" maxlength="200">
+    </div>
+    <div style="margin-top: 15px;">
+        <button type="submit">Record Exercise</button>
+    </div>
+</form>
+
+<p style="margin-top:30px;"><a href="{{ url_for('dashboard') }}">Back to Dashboard</a></p>
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Record Calories for {{ entry_date.strftime('%Y-%m-%d') }}{% endblock %}
+{% block content %}
+<h2>Record Calories for {{ entry_date.strftime('%B %d, %Y') }}</h2>
+
+{% if target_calories_for_day %}
+    <p>Your target for this day: <strong>{{ target_calories_for_day }} kcal</strong></p>
+{% else %}
+    <p>No specific target set for this day (you might be outside an active goal period).</p>
+{% endif %}
+
+<form method="POST" action="{{ url_for('record_calories', date_str=date_str) }}">
+    <div>
+        <label for="consumed_calories">Consumed Calories for the Day:</label>
+        <input type="number" name="consumed_calories" id="consumed_calories" 
+               value="{{ consumed_calories_val if consumed_calories_val is not none else 0 }}" 
+               required>
+        {% if error %}
+            <p style="color: red;">{{ error }}</p>
+        {% endif %}
+    </div>
+    <div>
+        <button type="submit">Save Calories</button>
+    </div>
+</form>
+
+<p><a href="{{ url_for('dashboard', year=entry_date.year, month=entry_date.month) }}">Back to Dashboard Calendar</a></p>
+{% endblock %}

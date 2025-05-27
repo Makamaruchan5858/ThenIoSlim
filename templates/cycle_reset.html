@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Cycle Reset - New Weight{% endblock %}
+{% block content %}
+<h2>Congratulations! You've Achieved a 7200 kcal Deficit!</h2>
+<p>This means you've made progress equivalent to approximately 1kg of weight change.</p>
+<p>Please enter your new current weight to start a new cycle.</p>
+
+<form method="POST" action="{{ url_for('cycle_reset') }}">
+    <div>
+        <label for="new_weight">New Current Weight (kg):</label>
+        <input type="number" name="new_weight" id="new_weight" step="0.1" required 
+               value="{{ current_user.weight if current_user.weight else '' }}">
+    </div>
+    <div>
+        <button type="submit">Update Weight and Start New Cycle</button>
+    </div>
+</form>
+
+<p style="margin-top:20px;"><a href="{{ url_for('dashboard') }}">Cancel and return to dashboard (will keep cycle complete status)</a></p>
+{% endblock %}
