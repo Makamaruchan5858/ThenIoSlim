@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash
 from datetime import datetime, date, timedelta
 import calendar
+import secrets # Added for CSRF token generation
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
@@ -56,6 +57,7 @@ def login():
         user = User.query.filter_by(email=email).first()
         if user and bcrypt.check_password_hash(user.password_hash, password):
             login_user(user)
+            session['_csrf_token'] = secrets.token_hex(16) # Generate and store CSRF token
             flash('Login successful!', 'success')
             return redirect(url_for('dashboard'))
         else:
@@ -121,9 +123,12 @@ def dashboard(year, month):
             entry = CalorieEntry.query.filter_by(user_id=user.id, date=day_date_obj).first()
             adjusted_for_day = 0
 
+            calorie_entry_id_for_day = None # Initialize
+
             if entry:
                 consumed_for_day = entry.consumed_calories
                 adjusted_for_day = entry.adjusted_calories
+                calorie_entry_id_for_day = entry.id # Store CalorieEntry ID
                 # If entry has its own target, it overrides the goal's general target for that day
                 if entry.target_calories_for_day is not None:
                     target_for_day = entry.target_calories_for_day
@@ -135,14 +140,16 @@ def dashboard(year, month):
 
             effective_consumed = consumed_for_day + adjusted_for_day
 
+            # This is the day_info dictionary used for fc_events generation later
             week_data.append({
-                'date': day_date_obj, # datetime.date object
+                'date': day_date_obj, 
                 'day_number': day_date_obj.day,
                 'is_current_month': day_date_obj.month == month,
-                'consumed_calories': consumed_for_day, # Actual intake
-                'adjusted_calories': adjusted_for_day, # Adjustments from other days
-                'effective_consumed': effective_consumed, # Total for display against target
-                'target_calories_for_day': target_for_day
+                'consumed_calories': consumed_for_day, 
+                'adjusted_calories': adjusted_for_day, 
+                'effective_consumed': effective_consumed, 
+                'target_calories_for_day': target_for_day,
+                'entry_id': calorie_entry_id_for_day # Added entry_id
             })
         calendar_data.append(week_data)
             
@@ -200,13 +207,191 @@ def dashboard(year, month):
                  day_info['effective_consumed'] -= day_info['daily_exercise_calories']
 
 
-    return render_template('dashboard.html', user=user, calendar_data=calendar_data, 
+    # Prepare events for FullCalendar
+    calendar_events = []
+    for week_data in calendar_data:
+        for day_info in week_data:
+            if not day_info['is_current_month']: # Only show events for the current month in view
+                continue
+
+            event_title_parts = []
+            class_names = ['fc-event-day-cell'] # Base class for all day cells with data
+
+            if day_info['target_calories_for_day'] is not None:
+                event_title_parts.append(f"{day_info['effective_consumed']} / {day_info['target_calories_for_day']} kcal")
+                if day_info['effective_consumed'] > day_info['target_calories_for_day']:
+                    class_names.append('fc-event-over')
+                elif day_info['effective_consumed'] < day_info['target_calories_for_day']:
+                    class_names.append('fc-event-under')
+                else:
+                    class_names.append('fc-event-target-met')
+            else:
+                event_title_parts.append(f"{day_info['effective_consumed']} kcal (No target)")
+                class_names.append('fc-event-no-target')
+            
+            if day_info['daily_exercise_calories'] > 0:
+                event_title_parts.append(f"+{day_info['daily_exercise_calories']} ex")
+                class_names.append('fc-event-exercise')
+            
+            if day_info['adjusted_calories'] > 0:
+                event_title_parts.append(f"({day_info['adjusted_calories']} adj in)")
+            elif day_info['adjusted_calories'] < 0: # Should not happen with current logic, but for future
+                event_title_parts.append(f"({abs(day_info['adjusted_calories'])} adj out)")
+
+
+            calendar_events.append({
+                'title': '\n'.join(event_title_parts), # Use newline to separate info lines
+                'start': day_info['date'].strftime('%Y-%m-%d'),
+                'allDay': True,
+                'display': 'block', # Ensures text is visible and background is not the event itself
+                'classNames': class_names,
+                'extendedProps': { 
+                    'calorie_entry_id': day_info.get('entry_id'), # Get the CalorieEntry ID
+                    'original_date': day_info['date'].strftime('%Y-%m-%d'), # Date of the cell
+                    'current_adjusted_calories': day_info.get('adjusted_calories', 0),
+                    'target_calories': day_info.get('target_calories_for_day'), # Can be None
+                    'consumed_calories_raw': day_info.get('consumed_calories', 0),
+                    # Retain other potentially useful props if needed
+                    'raw_exercise': day_info['daily_exercise_calories'] 
+                }
+            })
+
+    # Data for Daily Achievement Pie Chart (latest day with target)
+    daily_pie_chart_data = None
+    today = date.today()
+    # Check last 7 days for an entry with a target
+    for i in range(7):
+        current_check_date = today - timedelta(days=i)
+        calorie_entry = CalorieEntry.query.filter_by(user_id=user.id, date=current_check_date).first()
+        
+        if calorie_entry and calorie_entry.target_calories_for_day is not None:
+            effective_consumed = calorie_entry.consumed_calories + calorie_entry.adjusted_calories
+            target_kcal = calorie_entry.target_calories_for_day
+
+            # Apply exercise offset if applicable
+            if user.exercise_tracking_mode == 'offset':
+                exercise_on_day = ExerciseEntry.query.filter_by(user_id=user.id, date=current_check_date).all()
+                total_exercise_kcal_on_day = sum(ex.calories_burned for ex in exercise_on_day)
+                effective_consumed -= total_exercise_kcal_on_day
+            
+            consumed_part = max(0, effective_consumed) # Ensure consumed is not negative after exercise offset for pie chart logic
+            
+            labels = []
+            values = []
+            
+            if consumed_part <= target_kcal:
+                labels.append('Consumed')
+                values.append(consumed_part)
+                if consumed_part < target_kcal : # Only add "Remaining" if there's actually something remaining
+                    labels.append('Remaining')
+                    values.append(target_kcal - consumed_part)
+                elif consumed_part == target_kcal: # If exactly on target, "Remaining" is 0, can omit or show. Let's omit.
+                    pass 
+            else: # Over target
+                labels.append('Target Met') # Portion that met the target
+                values.append(target_kcal)
+                labels.append('Over Consumed') # Portion over the target
+                values.append(consumed_part - target_kcal)
+
+            if values: # Only set data if there's something to show
+                daily_pie_chart_data = {
+                    'labels': labels,
+                    'values': values,
+                    'date_str': current_check_date.strftime('%Y-%m-%d'),
+                    'target_kcal': target_kcal,
+                    'consumed_kcal': consumed_part # This is effective consumed
+                }
+            break # Found the latest day with data and target
+
+    # Data for Cumulative Progress Line Chart
+    cumulative_chart_data = None
+    if user.last_reset_date:
+        start_date = user.last_reset_date
+        end_date = date.today()
+        delta = end_date - start_date
+        
+        if delta.days >= 1: # Need at least two data points (start and one more day) for a line
+            date_labels = []
+            cumulative_target_kcal_list = []
+            cumulative_consumed_kcal_list = []
+            cumulative_exercise_kcal_list = []
+
+            current_cumulative_target = 0
+            current_cumulative_consumed = 0
+            current_cumulative_exercise = 0
+
+            for i in range(delta.days + 1):
+                current_day = start_date + timedelta(days=i)
+                date_labels.append(current_day.strftime('%Y-%m-%d'))
+
+                daily_target = 0
+                daily_consumed_effective = 0
+                daily_exercise = 0
+
+                calorie_entry = CalorieEntry.query.filter_by(user_id=user.id, date=current_day).first()
+                if calorie_entry:
+                    if calorie_entry.target_calories_for_day is not None:
+                        daily_target = calorie_entry.target_calories_for_day
+                    daily_consumed_effective = calorie_entry.consumed_calories + calorie_entry.adjusted_calories
+                
+                exercise_entries_on_day = ExerciseEntry.query.filter_by(user_id=user.id, date=current_day).all()
+                daily_exercise = sum(ex.calories_burned for ex in exercise_entries_on_day)
+
+                current_cumulative_target += daily_target
+                current_cumulative_consumed += daily_consumed_effective
+                current_cumulative_exercise += daily_exercise
+                
+                cumulative_target_kcal_list.append(current_cumulative_target)
+                cumulative_consumed_kcal_list.append(current_cumulative_consumed)
+                cumulative_exercise_kcal_list.append(current_cumulative_exercise)
+            
+            cumulative_chart_data = {
+                'labels': date_labels,
+                'datasets': [
+                    {
+                        'label': 'Cumulative Target Calories',
+                        'data': cumulative_target_kcal_list,
+                        'borderColor': 'rgba(54, 162, 235, 1)', # Blue
+                        'backgroundColor': 'rgba(54, 162, 235, 0.5)',
+                        'fill': False,
+                        'tension': 0.1
+                    },
+                    {
+                        'label': 'Cumulative Consumed Calories (Net)', # Net of food intake + adjustments
+                        'data': cumulative_consumed_kcal_list,
+                        'borderColor': 'rgba(255, 99, 132, 1)', # Red
+                        'backgroundColor': 'rgba(255, 99, 132, 0.5)',
+                        'fill': False,
+                        'tension': 0.1
+                    },
+                    {
+                        'label': 'Cumulative Exercise Calories Burned',
+                        'data': cumulative_exercise_kcal_list,
+                        'borderColor': 'rgba(75, 192, 192, 1)', # Green
+                        'backgroundColor': 'rgba(75, 192, 192, 0.5)',
+                        'fill': False,
+                        'tension': 0.1
+                    }
+                ]
+            }
+            # If only one data point after processing, it's not enough for a line graph.
+            if len(date_labels) < 2 :
+                 cumulative_chart_data = None
+
+
+    csrf_token_for_template = session.get('_csrf_token') # Get CSRF token for template
+
+    return render_template('dashboard.html', user=user,
+                           fc_events=calendar_events, 
                            cal_year=year, cal_month=month,
                            prev_year=prev_year, prev_month=prev_month,
                            next_year=next_year, next_month=next_month,
                            total_deficit_since_last_reset=total_deficit_since_last_reset,
                            cycle_complete_flag=cycle_complete_flag,
-                           total_exercise_kcal_since_reset=total_exercise_kcal_since_reset)
+                           total_exercise_kcal_since_reset=total_exercise_kcal_since_reset,
+                           daily_pie_chart_data=daily_pie_chart_data,
+                           cumulative_chart_data=cumulative_chart_data,
+                           csrf_token_for_js=csrf_token_for_template) # Pass CSRF token to template
 
 
 @app.route('/cycle_reset', methods=['GET', 'POST'])
@@ -292,6 +477,87 @@ def record_exercise():
             return render_template('record_exercise.html', today_date=date.today(), date_val=request.form.get('date'), cal_val=request.form.get('calories_burned'), desc_val=request.form.get('description'))
 
     return render_template('record_exercise.html', today_date=date.today())
+
+@app.route('/api/update_calorie_adjustment', methods=['POST'])
+@login_required
+def api_update_calorie_adjustment():
+    # CSRF Token Validation
+    submitted_csrf_token = request.headers.get('X-CSRF-Token')
+    session_csrf_token = session.get('_csrf_token')
+
+    if not session_csrf_token or not submitted_csrf_token:
+        return jsonify({'status': 'error', 'message': 'CSRF token missing.'}), 403
+    if not secrets.compare_digest(session_csrf_token, submitted_csrf_token): # Use compare_digest for security
+        return jsonify({'status': 'error', 'message': 'CSRF token invalid.'}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'status': 'error', 'message': 'Invalid JSON payload'}), 400
+
+    original_date_str = data.get('original_date_str')
+    new_date_str = data.get('new_date_str')
+    calorie_entry_id = data.get('calorie_entry_id') # This ID refers to the CalorieEntry on the original_date
+    adjustment_amount_to_move = data.get('adjustment_amount') # The amount of adj_cal to move
+
+    if not all([original_date_str, new_date_str, calorie_entry_id is not None, adjustment_amount_to_move is not None]):
+        return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+    try:
+        original_date = datetime.strptime(original_date_str, '%Y-%m-%d').date()
+        new_date = datetime.strptime(new_date_str, '%Y-%m-%d').date()
+        adjustment_amount_to_move = int(adjustment_amount_to_move)
+    except (ValueError, TypeError) as e:
+        return jsonify({'status': 'error', 'message': f'Invalid data format: {str(e)}'}), 400
+
+    try:
+        # 1. Process Source Entry
+        source_entry = CalorieEntry.query.filter_by(id=calorie_entry_id, user_id=current_user.id).first()
+
+        if not source_entry:
+            return jsonify({'status': 'error', 'message': 'Source calorie entry not found or not owned by user.'}), 404
+        
+        if source_entry.date != original_date:
+            # This implies the event dragged might not be the one with the ID, or date mismatch.
+            # This can happen if a day cell has no entry, but we still need to move 'potential' adjustments
+            # For this subtask, we assume calorie_entry_id IS the one from original_date.
+            return jsonify({'status': 'error', 
+                            'message': f'Source entry date mismatch. Expected {original_date_str}, got {source_entry.date.strftime("%Y-%m-%d")}.'}), 400
+        
+        # Subtract the amount that is being moved from the source entry's adjusted_calories
+        source_entry.adjusted_calories -= adjustment_amount_to_move
+        
+        # 2. Process Target Entry
+        target_entry = CalorieEntry.query.filter_by(date=new_date, user_id=current_user.id).first()
+
+        if target_entry:
+            target_entry.adjusted_calories += adjustment_amount_to_move
+        else:
+            # Determine target_calories_for_day for the new entry
+            # This logic should mirror how targets are usually determined (e.g., from user's goal if active)
+            target_for_new_day = None
+            if current_user.daily_calorie_goal and current_user.target_date and new_date <= current_user.target_date:
+                 # A simplified check: if a general goal is active and new_date is within its period
+                 # More precise logic might be needed if goals are date-specific beyond just target_date
+                 target_for_new_day = current_user.daily_calorie_goal
+
+            target_entry = CalorieEntry(
+                date=new_date,
+                user_id=current_user.id,
+                consumed_calories=0, # Dragging adjustment does not move consumed calories
+                adjusted_calories=adjustment_amount_to_move,
+                target_calories_for_day=target_for_new_day 
+            )
+            db.session.add(target_entry)
+            
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': 'Calorie adjustment successful'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        # Log the exception e for server-side debugging
+        app.logger.error(f"Error in /api/update_calorie_adjustment: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'An internal error occurred: {str(e)}'}), 500
+
 
 @app.route('/record_calories/<date_str>', methods=['GET', 'POST'])
 @login_required

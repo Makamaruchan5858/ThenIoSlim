@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}My Flask App{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/toastr/toastr.min.css') }}">
+    {% block head_extra %}{% endblock %}
 </head>
 <body>
     <div class="container">
@@ -19,5 +21,9 @@
         {% endwith %}
         {% block content %}{% endblock %}
     </div>
+
+    <script src="{{ url_for('static', filename='vendor/jquery/jquery.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/toastr/toastr.min.js') }}"></script>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

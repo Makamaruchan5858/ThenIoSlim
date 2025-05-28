@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
+
+{% block head_extra %}
+    {% if csrf_token_for_js %}
+    <meta name="csrf-token" content="{{ csrf_token_for_js }}">
+    {% endif %}
+{% endblock %}
+
 {% block content %}
     <h2>Welcome to your Dashboard, {{ current_user.email }}!</h2>
     <p>You are successfully logged in.</p>
@@ -37,70 +44,13 @@
     <p><a href="{{ url_for('logout') }}">Logout</a></p>
 
     <hr>
+    <!-- FullCalendar CSS - assuming main.global.min.js handles it, or link here if a separate CSS exists and is downloaded -->
+    <!-- <link href="{{ url_for('static', filename='vendor/fullcalendar/main.min.css') }}" rel="stylesheet"> -->
+    
     <h3>Calorie Calendar ({{ cal_month }}/{{ cal_year }})</h3>
-    {% if calendar_data %}
-        <table border="1" style="width:100%; border-collapse: collapse;">
-            <thead>
-                <tr>
-                    <th>Mon</th>
-                    <th>Tue</th>
-                    <th>Wed</th>
-                    <th>Thu</th>
-                    <th>Fri</th>
-                    <th>Sat</th>
-                    <th>Sun</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for week in calendar_data %}
-                <tr>
-                    {% for day_info in week %}
-                        <td style="padding: 5px; vertical-align: top; height: 80px; {% if not day_info.is_current_month %}background-color: #f0f0f0;{% endif %}">
-                            <a href="{{ url_for('record_calories', date_str=day_info.date.strftime('%Y-%m-%d')) }}" style="text-decoration: none; color: inherit; display: block; height: 100%;">
-                                <strong>{{ day_info.day_number }}</strong>
-                                {% if day_info.is_current_month %}
-                                    <br>
-                                    {% if day_info.target_calories_for_day %}
-                                        {{ day_info.effective_consumed }} / {{ day_info.target_calories_for_day }}
-                                        {% if day_info.adjusted_calories != 0 %}
-                                            <br><small>({{ day_info.consumed_calories }} + {{ day_info.adjusted_calories }} adj
-                                            {% if user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
-                                                - {{ day_info.daily_exercise_calories }} exer
-                                            {% endif %}
-                                            )</small>
-                                        {% elif user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
-                                             <br><small>({{ day_info.consumed_calories }} - {{ day_info.daily_exercise_calories }} exer)</small>
-                                        {% endif %}
-                                    {% else %}
-                                        {{ day_info.effective_consumed }} / -
-                                        {% if day_info.adjusted_calories != 0 %}
-                                            <br><small>({{ day_info.consumed_calories }} + {{ day_info.adjusted_calories }} adj
-                                            {% if user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
-                                                - {{ day_info.daily_exercise_calories }} exer
-                                            {% endif %}
-                                            )</small>
-                                        {% elif user.exercise_tracking_mode == 'offset' and day_info.daily_exercise_calories > 0 %}
-                                             <br><small>({{ day_info.consumed_calories }} - {{ day_info.daily_exercise_calories }} exer)</small>
-                                        {% endif %}
-                                    {% endif %}
-                                    {% if day_info.daily_exercise_calories > 0 %}
-                                        <br><small style="color: green;">+{{ day_info.daily_exercise_calories }} exercise</small>
-                                    {% endif %}
-                                {% endif %}
-                            </a>
-                        </td>
-                    {% endfor %}
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% else %}
-        <p>Set a goal or record calories/exercise for any day to see your calendar.</p>
-    {% endif %}
-    <p>
-        <a href="{{ url_for('dashboard', year=prev_year, month=prev_month) }}">&lt;&lt; Previous Month ({{ prev_month }}/{{ prev_year }})</a> | 
-        <a href="{{ url_for('dashboard', year=next_year, month=next_month) }}">Next Month ({{ next_month }}/{{ next_year }}) &gt;&gt;</a>
-    </p>
+    <div id='calendar-container'>
+        <div id='calendar'></div>
+    </div>
     <p><a href="{{ url_for('record_exercise') }}">Record Exercise</a> | <a href="{{ url_for('settings') }}">Settings (Exercise Mode: {{user.exercise_tracking_mode}})</a></p>
 
     <hr>
@@ -126,4 +76,342 @@
     </div>
     {% endif %}
 
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/fullcalendar/main.global.min.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var calendarEl = document.getElementById('calendar');
+    var events_data = JSON.parse('{{ fc_events | tojson | safe }}');
+
+    // Toastr options
+    toastr.options = {
+        "closeButton": true,
+        "debug": false,
+        "newestOnTop": false,
+        "progressBar": true,
+        "positionClass": "toast-top-right",
+        "preventDuplicates": false,
+        "onclick": null,
+        "showDuration": "300",
+        "hideDuration": "1000",
+        "timeOut": "5000",
+        "extendedTimeOut": "1000",
+        "showEasing": "swing",
+        "hideEasing": "linear",
+        "showMethod": "fadeIn",
+        "hideMethod": "fadeOut"
+    };
+    
+    var calendar = new FullCalendar.Calendar(calendarEl, {
+      initialView: 'dayGridMonth',
+      events: events_data,
+      initialDate: '{{ cal_year }}-{{ "%02d"|format(cal_month) }}-01', // Ensure month is 2 digits
+      editable: true, // Enable event dragging
+      eventContent: function(arg) {
+        let titleHtml = arg.event.title.split('\\n').join('<br>');
+        return { html: titleHtml }; 
+      },
+      dateClick: function(info) {
+        window.location.href = '{{ url_for("record_calories", date_str="DATE_PLACEHOLDER") }}'.replace('DATE_PLACEHOLDER', info.dateStr);
+      },
+      eventDrop: function(info) {
+            console.log("Event dropped - Full Info:", info);
+            const props = info.event.extendedProps;
+            const oldProps = info.oldEvent.extendedProps;
+
+            console.log("Calorie Entry ID from props:", props.calorie_entry_id);
+
+            // 1. Check if calorie_entry_id exists
+            if (props.calorie_entry_id === null || props.calorie_entry_id === undefined) {
+                toastr.info('この操作は、調整を含む既存のカロリー記録がある日に対してのみ許可されています。', '情報');
+                info.revert();
+                return;
+            }
+            
+            // Also check if there are any adjusted calories to move
+            if (props.current_adjusted_calories === 0 || props.current_adjusted_calories === null || props.current_adjusted_calories === undefined) {
+                 toastr.info('移動する調整カロリーがありません。 (' + oldProps.original_date + ')', '情報');
+                 info.revert(); 
+                 return;
+            }
+
+            // 2. Construct payload
+            const payload = {
+                original_date_str: oldProps.original_date, // Date from where the adjustment originated
+                new_date_str: info.event.startStr,       // Date where the event was dropped
+                calorie_entry_id: props.calorie_entry_id,  // ID of the CalorieEntry on original_date_str
+                adjustment_amount: props.current_adjusted_calories // Move the entire current_adjusted_calories amount
+            };
+            console.log("Sending payload:", payload);
+
+            // 3. Fetch API
+            const csrfTokenMeta = document.querySelector('meta[name="csrf-token"]');
+            const csrfToken = csrfTokenMeta ? csrfTokenMeta.getAttribute('content') : null;
+
+            if (!csrfToken) { 
+                toastr.error('セキュリティトークンが見つからないため、操作を完了できませんでした。ページを再読み込みしてください。', 'エラー');
+                info.revert();
+                return;
+            }
+
+            fetch('/api/update_calorie_adjustment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken // Add CSRF token to headers
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json().then(data => ({ status: response.status, body: data })))
+            .then(result => {
+                console.log("API Response:", result);
+                if (result.status === 200 && result.body.status === 'success') {
+                    toastr.success(result.body.message || 'カロリー調整が正常に完了しました。', '成功');
+                    if (calendar) { 
+                        calendar.refetchEvents();
+                    } else {
+                        window.location.reload(); 
+                    }
+                } else {
+                    toastr.error('エラー: ' + (result.body.message || 'カロリー調整に失敗しました。'), 'エラー');
+                    info.revert(); 
+                }
+            })
+            .catch(error => {
+                console.error('Error during fetch:', error);
+                toastr.error('予期せぬエラーが発生しました。もう一度お試しください。', 'エラー');
+                info.revert();
+            });
+        },
+      customButtons: {
+        prevCustom: { 
+          text: 'Prev',
+          click: function() {
+            window.location.href = '{{ url_for("dashboard", year=prev_year, month=prev_month) }}';
+          }
+        },
+        nextCustom: { // Renamed to avoid conflict with built-in 'next'
+          text: 'Next',
+          click: function() {
+            window.location.href = '{{ url_for("dashboard", year=next_year, month=next_month) }}';
+          }
+        }
+      },
+      headerToolbar: {
+        left: 'prevCustom,nextCustom today',
+        center: 'title',
+        right: 'dayGridMonth'
+      },
+       eventDidMount: function(info) {
+        // Example: info.el.title = info.event.title.replace(/\\n/g, ' | ');
+      }
+    });
+    calendar.render();
+
+    // Add CSS for fc-event-title to respect newlines if eventContent is not used for HTML
+    // This is a fallback / alternative if eventContent is not sufficient or used differently
+    var style = document.createElement('style');
+    style.type = 'text/css';
+    style.innerHTML = `
+        .fc-event-title { 
+            white-space: pre-line !important; /* Respect newlines in the title */
+            padding: 2px 4px; /* Basic padding */
+            font-size: 0.85em;
+            line-height: 1.3;
+        }
+        .fc-event-day-cell { /* Base style for our custom event "block" */
+            border-radius: 4px;
+            color: #333; /* Default text color */
+        }
+        .fc-event-over { background-color: #f8d7da !important; color: #721c24 !important; border-color: #f5c6cb !important; }
+        .fc-event-under { background-color: #d4edda !important; color: #155724 !important; border-color: #c3e6cb !important; }
+        .fc-event-target-met { background-color: #cce5ff !important; color: #004085 !important; border-color: #b8daff !important; }
+        .fc-event-no-target { background-color: #e2e3e5 !important; color: #383d41 !important; border-color: #d6d8db !important; }
+        .fc-event-exercise .fc-event-title { /* No specific style here, but class is available */ }
+        
+        .chart-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-around;
+            margin-top: 20px;
+        }
+        .chart-wrapper {
+            width: 45%;
+            min-width: 300px; /* Ensure charts are usable on smaller flex items */
+            margin-bottom: 20px;
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Daily Achievement Pie Chart
+    var pieChartCtx = document.getElementById('dailyAchievementChart').getContext('2d');
+    var pieChartData = JSON.parse('{{ daily_pie_chart_data | tojson | safe }}');
+    var dailyAchievementChartInstance = null; // To store the chart instance
+
+    if (pieChartData && pieChartData.values && pieChartData.values.some(v => v > 0)) {
+        // At least one value is greater than 0, so render the chart
+        var pieChartTitle = 'Daily Calorie Status (' + pieChartData.date_str + ')';
+        if (pieChartData.target_kcal) {
+             pieChartTitle += ' - Target: ' + pieChartData.target_kcal + ' kcal';
+        }
+
+
+        dailyAchievementChartInstance = new Chart(pieChartCtx, {
+            type: 'doughnut', // Doughnut is nicer for this usually
+            data: {
+                labels: pieChartData.labels,
+                datasets: [{
+                    data: pieChartData.values,
+                    backgroundColor: [
+                        'rgba(54, 162, 235, 0.7)', // Blue for Consumed/Target Met
+                        'rgba(255, 99, 132, 0.7)',  // Red for Over Consumed
+                        'rgba(75, 192, 192, 0.7)'  // Green for Remaining
+                        // Ensure colors match the number of labels/values expected.
+                        // If 'Remaining' is not present when target is met, this color list needs adjustment or dynamic assignment.
+                    ],
+                    borderColor: [
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 99, 132, 1)',
+                        'rgba(75, 192, 192, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false, // Allows more flexible sizing within wrapper
+                plugins: {
+                    title: {
+                        display: true,
+                        text: pieChartTitle,
+                        font: { size: 16 }
+                    },
+                    legend: {
+                        position: 'top',
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed !== null) {
+                                    label += context.parsed + ' kcal';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        // Adjust background colors based on actual labels present to avoid color mismatch
+        // This is a bit more robust if labels/values change order or number
+        const colorMap = {
+            'Consumed': 'rgba(54, 162, 235, 0.7)', // Blue
+            'Target Met': 'rgba(54, 162, 235, 0.7)', // Blue
+            'Remaining': 'rgba(75, 192, 192, 0.7)', // Green
+            'Over Consumed': 'rgba(255, 99, 132, 0.7)' // Red
+        };
+        const borderMap = {
+            'Consumed': 'rgba(54, 162, 235, 1)',
+            'Target Met': 'rgba(54, 162, 235, 1)',
+            'Remaining': 'rgba(75, 192, 192, 1)',
+            'Over Consumed': 'rgba(255, 99, 132, 1)'
+        };
+        if (dailyAchievementChartInstance) {
+             dailyAchievementChartInstance.data.datasets[0].backgroundColor = pieChartData.labels.map(label => colorMap[label] || 'rgba(201, 203, 207, 0.7)'); // Default grey
+             dailyAchievementChartInstance.data.datasets[0].borderColor = pieChartData.labels.map(label => borderMap[label] || 'rgba(201, 203, 207, 1)');
+             dailyAchievementChartInstance.update();
+        }
+
+    } else {
+        // Display a "No data" message or hide the canvas
+        var chartWrapper = pieChartCtx.canvas.parentNode;
+        var noDataMsg = document.createElement('p');
+        noDataMsg.textContent = 'No calorie data with a target found for the latest day in the past 7 days to display this chart.';
+        noDataMsg.style.textAlign = 'center';
+        noDataMsg.style.padding = '20px';
+        chartWrapper.innerHTML = ''; // Clear the canvas
+        chartWrapper.appendChild(noDataMsg);
+    }
+
+    // Cumulative Progress Line Chart
+    var lineChartCtx = document.getElementById('cumulativeProgressChart').getContext('2d');
+    var lineChartData = JSON.parse('{{ cumulative_chart_data | tojson | safe }}');
+    var cumulativeProgressChartInstance = null;
+
+    if (lineChartData && lineChartData.labels && lineChartData.labels.length >= 2) {
+        cumulativeProgressChartInstance = new Chart(lineChartCtx, {
+            type: 'line',
+            data: {
+                labels: lineChartData.labels,
+                datasets: lineChartData.datasets.map(dataset => ({
+                    ...dataset, // Spread original dataset properties (label, data, borderColor, etc.)
+                    fill: dataset.fill !== undefined ? dataset.fill : false, // Default fill to false
+                    tension: dataset.tension !== undefined ? dataset.tension : 0.1, // Default tension
+                    pointRadius: dataset.pointRadius !== undefined ? dataset.pointRadius : 3,
+                    pointHoverRadius: dataset.pointHoverRadius !== undefined ? dataset.pointHoverRadius : 5
+                }))
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Cumulative Calorie Trend (Current Cycle)',
+                        font: { size: 16 }
+                    },
+                    legend: {
+                        position: 'top',
+                    },
+                    tooltip: {
+                        mode: 'index', // Show all tooltips at the same x-axis point
+                        intersect: false,
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += context.parsed.y + ' kcal';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true, // Start y-axis at 0
+                        title: {
+                            display: true,
+                            text: 'Kilocalories (kcal)'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Date'
+                        }
+                    }
+                }
+            }
+        });
+    } else {
+        var lineChartWrapper = lineChartCtx.canvas.parentNode;
+        var noLineDataMsg = document.createElement('p');
+        noLineDataMsg.textContent = 'Not enough data to display the cumulative progress chart. At least two days of data are needed for this cycle.';
+        noLineDataMsg.style.textAlign = 'center';
+        noLineDataMsg.style.padding = '20px';
+        lineChartWrapper.innerHTML = ''; // Clear the canvas
+        lineChartWrapper.appendChild(noLineDataMsg);
+    }
+
+  });
+</script>
+<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.js') }}"></script>
 {% endblock %}
