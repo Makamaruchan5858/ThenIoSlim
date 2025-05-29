@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from datetime import datetime, date, timedelta
 import calendar
 import secrets # Added for CSRF token generation
@@ -76,6 +76,11 @@ def logout():
 @login_required
 def dashboard(year, month):
     user = User.query.get(current_user.id)
+    weight_entries_db = WeightEntry.query.filter_by(user_id=current_user.id).order_by(WeightEntry.date.asc()).all()
+    weight_entries_serializable = [
+        {'date': entry.date.strftime('%Y-%m-%d'), 'weight': entry.weight}
+        for entry in weight_entries_db
+    ]
     
     current_dt = date.today()
     if year is None:
@@ -391,7 +396,8 @@ def dashboard(year, month):
                            total_exercise_kcal_since_reset=total_exercise_kcal_since_reset,
                            daily_pie_chart_data=daily_pie_chart_data,
                            cumulative_chart_data=cumulative_chart_data,
-                           csrf_token_for_js=csrf_token_for_template) # Pass CSRF token to template
+                           csrf_token_for_js=csrf_token_for_template,
+                           weight_entries=weight_entries_serializable) # Pass CSRF token to template
 
 
 @app.route('/cycle_reset', methods=['GET', 'POST'])
@@ -736,6 +742,53 @@ def handle_overflow():
                            overflow_date_str=overflow_date_str,
                            remaining_days=remaining_days)
 
+@app.route('/record_weight', methods=['GET', 'POST'])
+@login_required
+def record_weight():
+    if request.method == 'POST':
+        date_str = request.form.get('date')
+        weight_str = request.form.get('weight')
+
+        if not date_str:
+            flash('Date is required.', 'danger')
+            return render_template('record_weight.html', today_date=date.today())
+        
+        try:
+            entry_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            flash('Invalid date format. Please use YYYY-MM-DD.', 'danger')
+            return render_template('record_weight.html', today_date=date.today(), date_val=date_str, weight_val=weight_str)
+
+        if not weight_str:
+            flash('Weight is required.', 'danger')
+            return render_template('record_weight.html', today_date=date.today(), date_val=date_str)
+
+        try:
+            weight = float(weight_str)
+            if weight <= 0:
+                flash('Weight must be a positive number.', 'danger')
+                return render_template('record_weight.html', today_date=date.today(), date_val=date_str, weight_val=weight_str)
+        except ValueError:
+            flash('Invalid input for weight. Please enter a number.', 'danger')
+            return render_template('record_weight.html', today_date=date.today(), date_val=date_str, weight_val=weight_str)
+
+        new_weight_entry = WeightEntry(
+            user_id=current_user.id,
+            date=entry_date,
+            weight=weight
+        )
+        db.session.add(new_weight_entry)
+        db.session.commit()
+        
+        # Also update the user's current weight in the User model
+        current_user.weight = weight
+        db.session.commit()
+
+        flash(f'Weight for {entry_date.strftime("%Y-%m-%d")} recorded successfully!', 'success')
+        return redirect(url_for('dashboard', year=entry_date.year, month=entry_date.month))
+
+    return render_template('record_weight.html', today_date=date.today())
+
 def calculate_total_progress(user_id, since_date=None):
     user = User.query.get(user_id)
     if not user:
@@ -879,6 +932,12 @@ class ExerciseEntry(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     calories_burned = db.Column(db.Integer, nullable=False)
     description = db.Column(db.String(200), nullable=True)
+
+class WeightEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    weight = db.Column(db.Float, nullable=False)
 
 if __name__ == '__main__':
     with app.app_context():
